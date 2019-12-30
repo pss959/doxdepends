@@ -11,7 +11,7 @@
 #   - C1 is derived directly from C2.
 #   - C2 is a nested class inside C1.
 #   - C1 has a member variable of type C2.
-#   - C1 has a member function with any parameter of type C2.
+#   - C1 has a non-abstract member function with any parameter of type C2.
 #   - C2 has a member function that is called by code in C1.
 #
 # This assumes the entire XML tree will fit in memory, so it may not work for
@@ -204,7 +204,11 @@ class Grapher(object):
         elif kind == 'function':
             if refid is not None:
                 self._AddDependency(class_refid, refid)
-            self._ProcessClassFunction(class_refid, member)
+            # Skip abstract functions - they do not really have dependencies on
+            # their parameters.
+            func_type = member.find('type')
+            if func_type.text and 'abstract' not in func_type.text:
+                self._ProcessClassFunction(class_refid, member)
 
     def _ProcessClassFunction(self, class_refid, func):
         # Add dependencies on any classes found as parameter types.
