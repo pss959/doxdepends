@@ -43,6 +43,12 @@ def ProcessArguments():
         help="""Prints information about dependency cycles between classes to
         standard output""")
     parser.add_argument(
+        '-g', '--draw_groups', action='store_true', dest='draw_groups',
+        default=False,
+        help="""Instead of drawing nodes representing all classes grouped into
+        clusters, just draw the groups with arrows representing dependencies
+        between them""")
+    parser.add_argument(
         '-n', '--target_namespace', default=None,
         help="""Specifies a target namespace for the graph. Any code entity
         within that namespace will have its namespace prefix (such as
@@ -125,7 +131,7 @@ class Grapher(object):
                           (self._ref_dict[key], self._ref_dict[dep]))
 
 
-    def OutputDotGraph(self, output_file):
+    def OutputDotGraph(self, output_file, draw_groups):
         # Recursively discover groups for nested classes.
         self._FindNestedClassGroups()
 
@@ -138,7 +144,11 @@ class Grapher(object):
         dependencies      = self._CollectDependencies()
 
         writer = Writer(output_file)
-        writer.Write(groups, ungrouped_classes, dependencies)
+        if draw_groups:
+            group_deps = self._CollectGroupDependencies()
+            writer.WriteGroups(groups, group_deps)
+        else:
+            writer.Write(groups, ungrouped_classes, dependencies)
 
     # ---------------- Implementation.
 
@@ -338,6 +348,36 @@ class Grapher(object):
             dependencies.append(Writer.Dependencies(name, sorted(deps)))
         return dependencies
 
+    def _CollectGroupDependencies(self):
+        """Returns a list of pairs representing dependencies between groups.
+        Each pair contains the names of the two groups."""
+        # If class C1 in group G1 depends on class C2 in group G2, then add
+        # (G1, G2).
+        group_dep_dict = self._BuildGroupDepDict()
+        dependencies = []
+        for from_group, to_groups in sorted(group_dep_dict.items()):
+            dependencies += [(self._ref_dict[from_group],
+                              self._ref_dict[to_group])
+                             for to_group in to_groups]
+        return dependencies
+
+    def _BuildGroupDepDict(self):
+        """Builds and returns a dictionary mapping each group refid to a set of
+        refids for all groups it depends on."""
+        group_dep_dict = {}
+        for refid in sorted(self._dep_dict.keys()):
+            if refid in self._group_dict:
+                from_group_refid = self._group_dict[refid]
+                deps = [dep for dep in self._dep_dict[refid]
+                        if dep in self._ref_dict and dep in self._group_dict]
+                for dep in deps:
+                    to_group_refid = self._group_dict[dep]
+                    if from_group_refid != to_group_refid:
+                        group_dep_dict[from_group_refid] = (
+                            group_dep_dict.get(from_group_refid, set()))
+                        group_dep_dict[from_group_refid].add(to_group_refid)
+        return group_dep_dict
+
 #-----------------------------------------------------------------------------
 # This class handles output.
 #-----------------------------------------------------------------------------
@@ -383,7 +423,7 @@ class Writer(object):
 
     def Write(self, groups, ungrouped_classes, dependencies):
         """Writes a graph represented by the groups, ungrouped classes, and
-        dependencies to the given output file path."""
+        dependencies."""
         if self._f is None:
             return
         self._WriteGraphHeader()
@@ -395,6 +435,20 @@ class Writer(object):
             self._WriteDependencies(dep)
         self._WriteGraphFooter()
 
+    def WriteGroups(self, groups, group_dependencies):
+        """Writes a graph showing only groups as clusters with dependencies
+        between them to the given output file path. Each dependency is a pair
+        containing the names of the two groups"""
+        if self._f is None:
+            return
+        self._WriteGroupGraphHeader()
+        for i, group in enumerate(groups):
+            self._WriteGroupAsNode(group, i)
+        for dep in group_dependencies:
+            self._WriteLine('   "%s" -> "%s";' % (dep[0], dep[1]))
+        self._WriteLine(' }')
+        self._WriteGraphFooter()
+
     # ---------------- Implementation.
 
     def _WriteGraphHeader(self):
@@ -403,6 +457,19 @@ class Writer(object):
         self._WriteLine(' concentrate=true;')
         self._WriteLine(' node [shape=record, fontname=Verdana,' +
                         ' fontsize=10, margin=.1, width=.2, height=.2];')
+
+    def _WriteGroupGraphHeader(self):
+        self._WriteLine('digraph groupdependencies {')
+        self._WriteLine(' rankdir="LR";');
+        self._WriteLine(' concentrate=true;')
+        self._WriteLine(' node [shape=record, fontname=Verdana,' +
+                        ' color=darkorange, fontcolor=darkorange,' +
+                        ' fontsize=12, penwidth=2];')
+        self._WriteLine(' edge [color=darkorange];')
+        self._WriteLine(' subgraph cluster_groups {')
+        self._WriteLine('   color=black;')
+        self._WriteLine('   penwidth=1;')
+        self._WriteLine('   margin=32;')
 
     def _WriteGraphFooter(self):
         self._WriteLine('}')
@@ -419,6 +486,9 @@ class Writer(object):
         for member in group.member_classes:
             self._WriteClass(member, extra_indent='  ')
         self._WriteLine(' }')
+
+    def _WriteGroupAsNode(self, group, index):
+        self._WriteLine('   %s;' % group.label)
 
     def _WriteClass(self, classs, extra_indent=''):
         self._WriteLine('%s "%s" [URL="\\ref %s", fontcolor=blue];' %
@@ -445,7 +515,7 @@ def main():
     grapher.ProcessXML(args.xml_directory, args.target_namespace)
     if args.report_cycles:
         grapher.ReportCycles()
-    grapher.OutputDotGraph(args.output_file)
+    grapher.OutputDotGraph(args.output_file, args.draw_groups)
 
 if __name__ == '__main__':
     main()
